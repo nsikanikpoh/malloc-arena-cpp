@@ -1,34 +1,32 @@
 #pragma once
 #include <signal.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <memory.h>
 #include <atomic>
 #include <vector>
-
-#include <sys/mman.h>
-#include <unistd.h>
-#include <stdio.h>
-
+#include <Arena.hpp>
 
 #define ALIGNMENT 8
 #define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
 
-class MMapObject;
+uintptr_t align_forward(uintptr_t ptr, size_t align) {
+	uintptr_t p, a, modulo;
+	p = ptr;
+	a = (uintptr_t)align;
+	// Same as (p % a) but faster as 'a' is a power of two
+	modulo = p & (a-1);
+	if (modulo != 0) {
+		// If 'p' address is not aligned, push the address to the
+		// next value which is aligned
+		p += a - modulo;
+	}
+	return p;
+}
 
-MMapObject* This = nullptr;
-
-class Arena;
-Arena* ArenaThis  = nullptr;
 // You can assume this as your page size. On some OSs (e.g. macOS), 
 // it may in fact be larger and you'll waste memory due to internal 
 // fragmentation as a result, but that's okay for this exercise.
 constexpr size_t pageSize = 4096;
 
-
-
 class MMapObject {
-
     // The size of the allocated contiguous pages (i.e. the size passed to mmap)
     size_t m_mmapSize;
 
@@ -41,14 +39,8 @@ class MMapObject {
     // outstanding pages there are.
     static std::atomic<size_t> s_outstandingPages;
 public:
-    
     MMapObject(const MMapObject& other) = delete;
-    MMapObject(){
-        This = this;
-    };
-    ~MMapObject(){
-        This = nullptr;
-    } 
+    MMapObject() = delete;
 
     /**
      * The number of contiguous bytes in this mmap allocation.
@@ -77,7 +69,7 @@ public:
 
         // TODO: mmap allocation code
         
-        This->m_arenaSize = arenaSize;
+        m_arenaSize = arenaSize;
 
        
         // if (offset >= getpagesize()) {
@@ -98,8 +90,8 @@ public:
                 
               //  offset = pageSize - (size + offset);
         
-        This->m_mmapSize = size;
-        return This;
+        m_mmapSize = size;
+        return this;
     }
 
     /**
@@ -112,9 +104,8 @@ public:
      * always return a pointer to just after the MMapObject header, so you can
      * jump back to the nearest multiple of page size and that will be the MMapObject*.
      */
-    static void dealloc(void* ptr) {
+    static void dealloc(void* obj) {
         size_t old = s_outstandingPages--;
-        MMapObject *obj = reinterpret_cast <MMapObject *>(ptr);
 
         // If there previously 0 pages, then we goofed and tried to free more pages
         // than we allocated. This is a serious bug, so sigtrap and your debugger
@@ -128,13 +119,12 @@ public:
         else{
             for(size_t i = 0; i <= old; i++)
             {
-                void *addr = reinterpret_cast <void *>(i * obj->mmapSize());
-                munmap(addr, obj->mmapSize());
+                munmap((i * obj->mmapSize()), obj->mmapSize());
             }
         }
-        MMapObject::s_outstandingPages = 0;
-        This->m_mmapSize = 0;
-        This->m_arenaSize = 0;
+        s_outstandingPages = 0;
+        m_mmapSize = 0;
+        m_arenaSize = 0;
     }
 
     /**
@@ -166,10 +156,9 @@ public:
  
      static void* alloc(size_t size) {
         // TODO: allocate the BigAlloc.
-        MMapObject* p = MMapObject::alloc(size, 0);
-        size_t aligned = ALIGN(p->mmapSize());
-        void *v = reinterpret_cast <void *>(aligned);
-        return v;
+        void* p = MMapObject::alloc(size, 0);
+        ALIGN(p);
+        return p;
     }
     
 };
@@ -183,12 +172,15 @@ class Arena : public MMapObject {
     // You'll need some means of tracking the number of freed items in this arena
     // in a thread-safe manner. That should go here.
     // mything thing = stuff;
-    uint8_t *region;
-    size_t size;
-    size_t current;
-    Arena *nextArena = nullptr;
-    size_t allocations = 0;
-    size_t expectedAllocations;
+
+    std::vector<size_t> free_list;
+   
+    unsigned char *buf;
+    size_t         buf_len;
+    size_t         prev_offset; // This will be useful for later on
+    size_t         curr_offset;
+    size_t         allocated = 0;
+
 
     // A pointer to the next free address in the arena.
     char* m_next;
@@ -205,11 +197,9 @@ class Arena : public MMapObject {
     // If sizeof(Arena) % 8 == 0, you should be good.
     char* m_data[0];
 
-public:
-    Arena(){
-        ArenaThis = this;
-    }
     
+
+public:
     /**
      * Creates an arena with items of the given size. You should allocate with
      * MMapObject::alloc() and coerce the result into an Arena*.
@@ -217,34 +207,17 @@ public:
     static Arena* create(uint32_t itemSize) {
         // TODO: create and initialize the arena.
         MMapObject* pointer_variable = MMapObject::alloc(pageSize, itemSize);
-        Arena* arena = reinterpret_cast <Arena*>(pointer_variable); 
-        if(!arena) return nullptr;
-        ArenaThis->region = (uint8_t *) ::calloc(itemSize, sizeof(uint8_t));
-        if(!ArenaThis->region) { 
-            ::free(arena); 
-            return nullptr; 
-        }
-
-        ArenaThis->expectedAllocations = (pageSize - sizeof(Arena)) / itemSize;
-
-        ArenaThis->size = itemSize;
-        return arena;
+        Arena* alloc = reinterpret_cast <Arena *>(pointer_variable);
+        unsigned char backing_buf[feritemSize];
+        buf = (unsigned char*)backing_buffer;
+        buf_len = itemSize;
+        curr_offset = 0;
+        prev_offset = 0;
+        return alloc;
     }
-
 
     ~Arena () { 
-        ArenaThis  = nullptr;
-    }
 
-    void deallocate(){
-        Arena *nextptr, *last = this;
-        do {
-            nextptr = last->nextArena;
-            ::free(last->region);
-            ::free(last);
-            allocations--;
-            last = nextptr;
-        } while(nextptr != nullptr);
     }
 
     /**
@@ -254,51 +227,62 @@ public:
     void* alloc() {
         // TODO: return a pointer to an item in this arena. We should return nullptr
         // if there are no more slots in which to allocate data.
-       // return arena_alloc_align(sizeof(char), ALIGNMENT);
-       if(allocations == expectedAllocations)
-       {
-           return nullptr;
-       }
-       else
-       {
-           Arena *last, *loop = this;
-
-            do {
-            if((size - current) >= pageSize){
-                current += pageSize;
-                return region + (current - pageSize);
-            }
-            } while((loop = loop->nextArena) != nullptr);
-
-            Arena *nextptr  = Arena::create(pageSize);
-            last->nextArena     = nextptr;
-            loop->current += pageSize;
-
-            allocations++;
-
-            return loop->region;
-       }
+        return arena_alloc_align(sizeof(char), ALIGNMENT);
     }
 
-   
+    void *arena_alloc_align(size_t size, size_t align) {
+	// Align 'curr_offset' forward to the specified alignment
+	uintptr_t curr_ptr = (uintptr_t)buf + (uintptr_t)curr_offset;
+	uintptr_t offset = align_forward(curr_ptr, align);
+	offset -= (uintptr_t)buf; // Change to relative offset
+
+	// Check to see if the backing memory has space left
+	if (offset+size <= buf_len) {
+		void *ptr = &buf[offset];
+		prev_offset = offset;
+		curr_offset = offset+size;
+
+		// Zero new memory by default
+		memset(ptr, 0, size);
+        allocated++;
+        // remove from free list
+        for (auto it = free_list.begin(); it != free_list.end(); ) {
+                if (*it == allocated) {
+                    it = free_list.erase(it);
+                } else {
+                    ++it;
+                }
+        }
+		return ptr;
+	}
+	// Return nullptr if the arena is out of memory (or handle differently)
+	return nullptr;
+}
+
+  void deallocate () {
+      curr_offset = 0;
+	  prev_offset = 0;
+      allocated = 0;
+  }
+
     /**
      * Marks one of the items in the arena as freed. Returns true if this arena
      * has no more allocation slots and everything is free'd.
      */
     bool free() {
         // TODO: actually free an item the arena.
-        
-        Arena *nextptr = nullptr, *last = this;
-        if((nextptr != nullptr)){
-            nextptr = last->nextArena;
-            ::free(last->region);
-            ::free(last);
-            last = nextptr;
-        }
-        
-        allocations--;
-        if(allocations == 0)
+        if(free_list.size() == itemSize)
         {
+            curr_offset = 0;
+	        prev_offset = 0;
+            return true;
+        }   
+        free_list.push_back(allocated - 1);
+        allocated--;
+        if(free_list.size() == itemSize)
+        {
+            curr_offset = 0;
+	        prev_offset = 0;
             return true;
         }
         return false;
@@ -309,14 +293,14 @@ public:
      */
     bool full() {
         // TODO: acutally compute full()
-        return allocations == expectedAllocations;
+        return allocated == itemSize;  
     }
 
     /**
      * Returns a pointer to the next free item in the arena.
      */
     char* next() {
-        m_next = reinterpret_cast <char *>(nextArena);
+        m_next = reinterpret_cast <char *>(&curr_offset);
         return m_next;
     }
 };
@@ -339,14 +323,14 @@ public:
      */
     void* alloc(size_t bytes) {
         // TODO: implement alloc
+        void* alloc;
         if(bytes > 2048)
         {
-            void *alloc = BigAlloc::alloc(bytes);
-            return alloc;
+            alloc = BigAlloc::alloc(bytes, 0);
         }
         else
         {
-            Arena *alloc = Arena::create(bytes);
+            alloc = Arena::create(bytes);
             switch(bytes)
             {
                 case 8:
@@ -369,9 +353,8 @@ public:
                  m_arenas[8] = alloc;
 
             }
-            void *v = reinterpret_cast <void *>(alloc);
-            return v;
-        } 
+        }
+        return alloc;
     }
 
     /**
@@ -380,29 +363,32 @@ public:
      */
     void free(void* ptr) {
         // TODO: implement free.
-        MMapObject *mmpaObj = reinterpret_cast <MMapObject *>(ptr);
-        MMapObject::dealloc(mmpaObj);
-        if(mmpaObj->arenaSize() != 0)
+        if(ptr->arenaSize() == 0)
         {
-            Arena *arena = reinterpret_cast <Arena *>(ptr);
-            arena->deallocate();
+            MMapObject::dealloc(ptr);
         }
+        else
+        {
+            MMapObject::dealloc(ptr);
+            ptr->deallocate();
+        }
+        
     }
 
 };
 
 void* myMalloc(size_t n){
-    ArenaStore as;
-    return as.alloc(n);
+    return ArenaStore::alloc(n);
 }
 void myFree(void* ptr)
 {
-    MMapObject *mmpaObj = reinterpret_cast <MMapObject *>(ptr);
-    MMapObject::dealloc(mmpaObj);
-    if(mmpaObj->arenaSize() != 0)
-    {
-        Arena *arena = reinterpret_cast <Arena *>(ptr);
-        arena->deallocate();
-    }
+    if(ptr->arenaSize() == 0)
+        {
+            MMapObject::dealloc(ptr);
+        }
+        else
+        {
+            MMapObject::dealloc(ptr);
+            ptr->deallocate();
+        }
 }
-

@@ -10,6 +10,5 @@ void usage() {
 }
 
 int mainImpl(int argc, const char* argv[]) {
-    
     return 0;
 }
