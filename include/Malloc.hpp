@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <mutex> 
+#include <iostream>
 
  
 
@@ -97,31 +98,8 @@ public:
         MMapObject* sd;
         sd->setmmapSize(size);
         sd->setarenaSize(arenaSize);
-
-        // TODO: mmap allocation code
-        
-        //m_arenaSize = arenaSize;
-
-       
-        // if (offset >= getpagesize()) {
-        //     fprintf(stderr, "offset is past end of file\n");
-        //     exit(EXIT_FAILURE);
-        // }
-
-        // if (offset + size > getpagesize())
-        //     size = getpagesize() - offset;
-        //     /* Can't display bytes past end of file */
-        // }
-        // offset = getpagesize() - (size + offset);
-
-          //size = size + (unsigned long)pageSize - (size % (unsigned long)pageSize);
         mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_ANON, -1, 0);
 
-                //mmap(0, size - 1, PROT_READ | PROT_WRITE, MAP_SHARED, 0, 0);
-                
-              //  offset = pageSize - (size + offset);
-        
-       // m_mmapSize = size;
         return sd;
     }
 
@@ -137,7 +115,8 @@ public:
      */
     static void dealloc(void* ptr) {
         size_t old = s_outstandingPages--;
-        MMapObject *obj = reinterpret_cast <MMapObject *>(ptr);
+        MMapObject *obj = reinterpret_cast<MMapObject *>(ptr);
+        //reinterpret_cast<MMapObject*>(((char*)data - sizeof(BigAlloc)));
 
         // If there previously 0 pages, then we goofed and tried to free more pages
         // than we allocated. This is a serious bug, so sigtrap and your debugger
@@ -151,7 +130,7 @@ public:
         else{
             for(size_t i = 0; i <= old; i++)
             {
-                void *addr = reinterpret_cast <void *>(i * obj->mmapSize());
+                void *addr = reinterpret_cast <void*>(i * obj->mmapSize());
                 munmap(addr, obj->mmapSize());
             }
         }
@@ -173,6 +152,8 @@ class BigAlloc : public MMapObject {
     // This inherits from MMapObject, so it also has the mmapSize and arenSize
     // members as well.
 
+    size_t sizeT;
+
     struct FreeStore
     {
      FreeStore* next;
@@ -183,8 +164,7 @@ class BigAlloc : public MMapObject {
             sizeof(volatile char*) : sizeof(FreeStore*);
             FreeStore* head = reinterpret_cast <FreeStore*> (new char[size]);
             freeStoreHead = head;
-
-            for (int i = 0; i < pageSize; i++) {
+            for (int i = 0; i < sizeT; i++) {
                 head->next = reinterpret_cast <FreeStore*> (new char[size]);
                 head = head->next;
             }
@@ -199,7 +179,7 @@ class BigAlloc : public MMapObject {
             delete[] nextPtr; // remember this was a char array
         }
     }
-    FreeStore* freeStoreHead;
+    FreeStore* freeStoreHead = 0;
     char m_data[0];
 
 public:
@@ -210,12 +190,9 @@ public:
         expandPoolSize();
     } 
       
-    
     virtual ~BigAlloc() { 
       cleanUp();
     }
-
-    
 
     /**
      * This method should allocate a single large contiguous block of memory using
@@ -224,24 +201,21 @@ public:
      * 
      * The returned address must be 64-bit aligned.
      */
-
-     
- 
      static void* alloc(size_t size) {
         // TODO: allocate the BigAlloc.
-       //mtx.lock(); 
-       MMapObject* p = MMapObject::alloc(size, 0);
-        BigAlloc* j;
-         if (0 == j->freeStoreHead)
+       // pthread_mutex_lock (&lock); 
+       MMapObject* p = (BigAlloc*)MMapObject::alloc(size, 0);
+       BigAlloc* j = reinterpret_cast<BigAlloc*>(p); 
+       if(!j) return nullptr;
+       j->sizeT = size; 
+        if(0 == j->freeStoreHead)
             j->expandPoolSize();
-
         FreeStore* head = j->freeStoreHead;
         j->freeStoreHead = head->next;
         void *v = reinterpret_cast <void*>(head);
         return v;
-      // mtx.unlock();
+       // pthread_mutex_unlock (&lock);
     }
-    
 };
 
 // This is the data overlay for your Arena allocator.
@@ -293,7 +267,6 @@ public:
         }
 
         arena->expectedAllocations = (pageSize - sizeof(Arena)) / itemSize;
-
         arena->size = itemSize;
         return arena;
     }
@@ -387,7 +360,7 @@ public:
      */
     char* next() {
         // mtx.lock();
-        m_next = reinterpret_cast <char *>(nextArena);
+        m_next = reinterpret_cast<char*>(this) + sizeof(Arena);
         return m_next;
         // mtx.unlock();
     }
