@@ -205,7 +205,7 @@ public:
         // TODO: allocate the BigAlloc.
        // pthread_mutex_lock (&lock); 
        MMapObject* p = (BigAlloc*)MMapObject::alloc(size, 0);
-       BigAlloc* j = reinterpret_cast<BigAlloc*>(p); 
+       BigAlloc* j = static_cast<BigAlloc*>(p); 
        if(!j) return nullptr;
        j->sizeT = size; 
         if(0 == j->freeStoreHead)
@@ -258,7 +258,7 @@ public:
     static Arena* create(uint32_t itemSize) {
         // TODO: create and initialize the arena.
         MMapObject* pointer_variable = MMapObject::alloc(pageSize, itemSize);
-        Arena* arena = reinterpret_cast <Arena*>(pointer_variable); 
+        Arena* arena =  static_cast <Arena*>(pointer_variable); 
         if(!arena) return nullptr;
         arena->region = (uint8_t *) ::calloc(itemSize, sizeof(uint8_t));
         if(!arena->region) { 
