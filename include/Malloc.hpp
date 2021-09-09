@@ -7,19 +7,21 @@
 #include <vector>
 #include <deque>
 #include <map>
-#include <pthread.h>
+#include <mutex>          // std::mutex
 #include <sys/mman.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <mutex> 
 
+ 
 
 #define ALIGNMENT 8
 #define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
-
+ 
 class MMapObject;
 class ArenaStore;
 class Arena;
-
+//std::mutex mtx; 
 //MMapObject* This = nullptr;
 
 //class Arena;
@@ -227,7 +229,7 @@ public:
  
      static void* alloc(size_t size) {
         // TODO: allocate the BigAlloc.
-       // pthread_mutex_lock (&lock); 
+       //mtx.lock(); 
        MMapObject* p = MMapObject::alloc(size, 0);
         BigAlloc* j;
          if (0 == j->freeStoreHead)
@@ -237,7 +239,7 @@ public:
         j->freeStoreHead = head->next;
         void *v = reinterpret_cast <void*>(head);
         return v;
-       // pthread_mutex_unlock (&lock);
+      // mtx.unlock();
     }
     
 };
@@ -297,6 +299,7 @@ public:
     }
 
     void deallocate(){
+        // mtx.lock();
         Arena *nextptr, *last = this;
         do {
             nextptr = last->nextArena;
@@ -305,6 +308,7 @@ public:
             allocations--;
             last = nextptr;
         } while(nextptr != nullptr);
+        //  mtx.unlock();
     }
 
     /**
@@ -312,6 +316,7 @@ public:
      * have already exceeded the bounds of the arena.
      */
     void* alloc() {
+        // mtx.unlock();
         // TODO: return a pointer to an item in this arena. We should return nullptr
         // if there are no more slots in which to allocate data.
        // return arena_alloc_align(sizeof(char), ALIGNMENT);
@@ -337,7 +342,9 @@ public:
             allocations++;
 
             return loop->region;
+            
        }
+    //    mtx.unlock();
     }
 
    
@@ -347,7 +354,7 @@ public:
      */
     bool free() {
         // TODO: actually free an item the arena.
-        
+        // mtx.lock();
         Arena *nextptr = nullptr, *last = this;
         if((nextptr != nullptr)){
             nextptr = last->nextArena;
@@ -362,6 +369,7 @@ public:
             return true;
         }
         return false;
+        // mtx.unlock();
     }
 
     /**
@@ -369,15 +377,19 @@ public:
      */
     bool full() {
         // TODO: acutally compute full()
+        // mtx.lock();
         return allocations == expectedAllocations;
+        // mtx.unlock();
     }
 
     /**
      * Returns a pointer to the next free item in the arena.
      */
     char* next() {
+        // mtx.lock();
         m_next = reinterpret_cast <char *>(nextArena);
         return m_next;
+        // mtx.unlock();
     }
 };
 
@@ -392,116 +404,66 @@ class ArenaStore {
      */
     Arena* m_arenas[9]; // Default initializer for pointer is nullptr
 
-     std::deque<void*>     Byte8PtrList;
-    std::deque<void*>     Byte16PtrList;
-    std::deque<void*>     Byte24PtrList;
-    std::deque<void*>     Byte32PtrList;
-    std::deque<void*>     Byte40PtrList;
-    std::deque<void*>    MemoryPoolList;
-
 public:
     /**
      * Allocates `bytes` bytes of data. If the data is too large to fit in an arena,
      * it will be allocated using BigAlloc.
      */
-    void* alloc(size_t size) {
+    void* alloc(size_t bytes) {
         // TODO: implement alloc
-         
-            void *base;
-            void *blockPtr =  Byte32PtrList.front();
-            switch(size)
-                {
-                case JOB_SCHEDULER_SIZE :  
-                {
-                if(Byte32PtrList.empty())
-                    {
-                    base = new char [32 & POOL_SIZE];
-                    MemoryPoolList.push_back(base);
-                   // InitialiseByte32List(base);
-                    }
-                
-                ((static_cast<char*>(blockPtr)) + 30); //size of block set
-                ((static_cast<char*>(blockPtr)) + 31); //block is no longer free
-                Byte32PtrList.pop_front();
-                return blockPtr;
-                }         
-                case COORDINATE_SIZE :  
-                {
-                if(Byte40PtrList.empty())
-                    {
-                    base = new char [40 & POOL_SIZE];
-                    MemoryPoolList.push_back(base);
-                    //InitialiseByte40List(base);
-                    }
-                void *blockPtr =  Byte40PtrList.front();
-                ((static_cast<char*>(blockPtr)) + 38); //size of block set
-                ((static_cast<char*>(blockPtr)) + 39); //block is no longer free
-                Byte40PtrList.pop_front();
-                return blockPtr;
-                }         
-                case COMPLEX_SIZE : 
-                {
-                if(Byte24PtrList.empty())
-                    {
-                    base = new char [24 & POOL_SIZE];
-                    MemoryPoolList.push_back(base);
-                   // InitialiseByte24List(base);
-                    }
-                void* blockPtr =  Byte24PtrList.front();
-                ((static_cast<char*>(blockPtr)) + 22); //size of block set
-                ((static_cast<char*>(blockPtr)) + 23); //block is no longer free
-                Byte24PtrList.pop_front();
-                return blockPtr;
-                }
-                default : break;
-                }
-            return 0;
+        if(bytes > 2048)
+        {
+            void *alloc = BigAlloc::alloc(bytes);
+            return alloc;
+        }
+        else
+        {
+            Arena *alloc = Arena::create(bytes);
+            switch(bytes)
+            {
+                case 8:
+                 m_arenas[0] = alloc;
+                case 16:
+                 m_arenas[1] = alloc;
+                case 32:
+                 m_arenas[2] = alloc;
+                case 64:
+                 m_arenas[3] = alloc;
+                case 128:
+                 m_arenas[4] = alloc;
+                case 256:
+                 m_arenas[5] = alloc;
+                case 512:
+                 m_arenas[6] = alloc;
+                case 1024:
+                 m_arenas[7] = alloc;
+                case 2048:
+                 m_arenas[8] = alloc;
+
             }
-        
-    
+            void *v = reinterpret_cast <void *>(alloc);
+            return v;
+        } 
+    }
 
     /**
      * Determines the allocation type for the given pointer and calls
      * the appropriate free method.
      */
-    void free(void* object) {
+    void free(void* ptr) {
         // TODO: implement free.
-        //MMapObject *mmpaObj = reinterpret_cast <MMapObject *>(ptr);
-        //MMapObject::dealloc(mmpaObj);
-        char* init = static_cast<char*>(object);
-
-        while(1)
-            {
-            int count = 0;
-            while(*init != static_cast<char>(0xde))  
-                //this loop shall never iterate more than 
-            {                 // MAX_BLOCK_SIZE times and hence is O(1)
-            init++;
-            if(count > MAX_BLOCK_SIZE)
-                {
-               // printf ("runtime heap memory corruption near %d", object);
-                exit(1);
-                } 
-            count++; 
-            }
-            if(*(++init) == static_cast<char>(0xad))  // we have hit the guard bytes
-            break;  // from the outer while 
-            }
-        init++;
-        int blockSize = static_cast<int>(*init);
-        switch(blockSize)
-            {
-            case 24: Byte24PtrList.push_front(object); break;
-            case 32: Byte32PtrList.push_front(object); break;
-            case 40: Byte40PtrList.push_front(object); break;
-            default: break;
-            }
-        init++;
-        *init = 1; // set free/available byte
-            }
+        MMapObject *mmpaObj = reinterpret_cast <MMapObject *>(ptr);
+        MMapObject::dealloc(mmpaObj);
+        if(mmpaObj->arenaSize() != 0)
+        {
+            Arena *arena = reinterpret_cast <Arena *>(ptr);
+            arena->deallocate();
+        }
+    }
 
 };
 
 void* myMalloc(size_t n);
 void myFree(void* ptr);
+
 
