@@ -294,13 +294,13 @@ void canMallocAndFreeABunchOfStuffThreaded() {
 int runMallocTests() {
     TestSuite suite;
 
-    TEST(suite, canAllocateBigObject);
-    TEST(suite, mmapObjectHasCorrectSize);
-    TEST(suite, arenaHasCorrectSize);
-    TEST(suite, canAllocCorrectNumberOfBlocks);
-    TEST(suite, canFreeCorrectNumberOfBlocks);
-    TEST(suite, canMallocAndFreeABunchOfStuff);
-    TEST(suite, canMallocAndFreeABunchOfStuffThreaded);
+    //TEST(suite, canAllocateBigObject);
+    //TEST(suite, mmapObjectHasCorrectSize);
+   TEST(suite, arenaHasCorrectSize);
+   // TEST(suite, canAllocCorrectNumberOfBlocks);
+    //TEST(suite, canFreeCorrectNumberOfBlocks);
+    //TEST(suite, canMallocAndFreeABunchOfStuff);
+    //TEST(suite, canMallocAndFreeABunchOfStuffThreaded);
 
     rusage resourseUsage;
 
